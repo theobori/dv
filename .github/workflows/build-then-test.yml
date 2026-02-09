@@ -1,0 +1,41 @@
+name: Build Then Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - run: nix flake check
+
+  build-then-test:
+    needs: [check]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Latest Emacs released versions
+        # Base on https://www.gnu.org/software/emacs/history.html
+        emacs_version:
+          - 30.1
+          - 30.2
+    steps:
+    - uses: actions/checkout@v4
+    - uses: purcell/setup-emacs@master
+      with:
+        version: ${{ matrix.emacs_version }}
+    # The step above installs Nix
+    - name: Install graphviz tools with Nix
+      # Using `nix-profile install` to be compliant with purcell/setup-emacs
+      # See https://github.com/purcell/setup-emacs/blob/master/install.sh#L20
+      run: nix profile install nixpkgs/a48c9dbce9a434f3647d4d9eab783eca11a242c4#graphviz-nox
+    - name: Build the Elisp files
+      run: make clean && make
+    - name: Run units tests
+      run: make test
