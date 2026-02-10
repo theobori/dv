@@ -100,14 +100,16 @@ It returns GRAPH."
 	(puthash pkg (cons desc children) graph)))
     graph))
 
-(defun dv-package-create-graph (pkg)
-  "It creates and returns a new hash table representing a package
-dependencies graph.
+(defun dv-package-create-graph (&rest pkgs)
+  "It creates and returns a new hash table representing PKGS dependencies
+graph.
 
 See `dv--package-update-graph' for more details."
   (let ((graph (make-hash-table :test 'equal))
 	(seen (make-hash-table :test 'equal)))
-    (dv--package-update-graph graph seen pkg)))
+    (dolist (pkg pkgs)
+      (dv--package-update-graph graph seen pkg))
+    graph))
 
 (defun dv--get-package-desc-node-label (desc)
   "Returns a node label for a `package-desc' object."
@@ -125,7 +127,7 @@ See `dv--package-update-graph' for more details."
   "Returns a node label depending of the METADATA object type."
   (cond ((stringp metadata) (dv--get-filepath-node-label metadata))
 	((package-desc-p metadata) (dv--get-package-desc-node-label metadata))
-	(t (error "Invalid metadata type %s" (type-of metadata)))))
+	(t (error "Invalid node metadata type %s" (type-of metadata)))))
 
 (defun dv--create-dot-code-links (graph seen pkg)
   "Returns a string representing dot code dependencies relations for a
@@ -171,8 +173,10 @@ the produced dot code will be written."
   (let ((dot-code (string-join
 		   (list
 		    "digraph {"
-		    ;; Preventing only orphans nodes, resulting into a blank graph
-		    ;; So we first declare every dependency as a header
+		    ;; Preventing a scenario where there are only orphans nodes,
+		    ;; resulting into a blank graph
+		    ;;
+		    ;; So we first declare every dependency as a header.
 		    (dv--create-dot-code-var-declarations graph)
 		    ;; Then we compute the nodes links
 		    (apply
@@ -185,13 +189,13 @@ the produced dot code will be written."
 	(insert dot-code)))
     dot-code))
 
-(defun dv-package (pkg dest-file &optional open-file)
+(defun dv-package (dest-file &optional open-file &rest pkgs)
   "This function produces dot code representing PKG dependencies. This dot
 code is passed to the dot program that will interpret it, then create an
 image written at the DEST-FILE filepath. If OPEN-FILE is non-nil, the
 produced image will be open by Emacs when possible."
-  (let* ((graph (dv-package-create-graph pkg))
-	 (dot-code (dv-create-dot-code graph nil pkg))
+  (let* ((graph (apply #'dv-package-create-graph pkgs))
+	 (dot-code (apply #'dv-create-dot-code graph nil pkgs))
 	 (file-format (file-name-extension dest-file))
 	 (absolute-path (file-truename dest-file))
 	 ;; Sentinel function evaluated after the dot process execution.
@@ -202,7 +206,6 @@ produced image will be open by Emacs when possible."
 			 (error "%s failed with status code %s" proc status)))
 		     (when (and (display-graphic-p) open-file)
 		       (find-file absolute-path)))))
-    (message "%s" dot-code)
     (dv-run-dot dot-code sentinel "-T" file-format "-o" dest-file)
     (message "The file %s has been created" absolute-path)))
 
