@@ -50,8 +50,35 @@
 
 ;;;; Constants
 
-(defconst dv-type-package 'package "Graph node type for package")
-(defconst dv-type-path 'path "Graph node type for path")
+(defconst dv-type-package 'package
+  "Graph node type for package")
+
+(defconst dv-type-path 'path
+  "Graph node type for path")
+
+(defconst dv-require-regexp "(\\s-*require\\s-*'\\(?1:[a-z]*\\)\\s-*"
+  "Regular expression for capturing `require' package name")
+
+(defconst dv-use-package-regexp "(use-package\\s-*\\(?1:[a-z-]+\\)"
+  "Regular expression for capturing `use-package' package name")
+
+(defconst dv-load-regexp "(load\\s-*\"\\(?1:.*\\)\""
+  "Regular expression for capturing `load' file path")
+
+(defconst dv-load-file-regexp "(load-file\\s-*\"\\(?1:.*\\)\"\\s-*)"
+  "Regular expression for capturing `load-file' file path")
+
+(defconst dv-package-match-pairs (list
+				  (cons dv-require-regexp 1)
+				  (cons dv-use-package-regexp 1))
+  "List of cons, regular expressions that capture package names associated
+with the amount of regexp groups for each")
+
+(defconst dv-path-match-pairs (list
+			       (cons dv-load-file-regexp 1)
+			       (cons dv-load-regexp 1))
+  "List of cons, regular expressions that capture package names associated
+with the amount of regexp groups for each")
 
 ;;;; Structures
 
@@ -71,11 +98,63 @@
 			:type any
 			:documentation "Representing the node metadata")
 	      (children nil
-			:read-only t
+			:read-only nil
 			:type list
 			:documentation "Containing the node children"))
 
 ;;;; Functions and Emacs user commands
+
+(defun dv--get-string-from-file (path)
+  "Return file PATH content as string."
+  (with-temp-buffer
+    (insert-file-contents path)
+    (buffer-string)))
+
+(defun dv--match-strings-all-groups (regexp string groups-amount)
+  "Returns a list of string where each string correspond to a REGEXP group
+that matched text in STRING. GROUPS-AMOUNT is the amount of group within
+REGEXP, each of them should be go from 1 to GROUPS-AMOUNT incrementing
+by 1 each time."
+  (save-match-data
+    (let ((index 0)
+	  (cycle-table (make-hash-table :test #'equal))
+	  (matches))
+      (while (and
+	      (string-match regexp string index)
+	      (null (gethash index cycle-table)))
+	(puthash index t cycle-table)
+	(setq index (match-end 0))
+	(let ((amount groups-amount))
+	  (while (>= amount 1)
+	    (let ((match (match-string-no-properties amount string)))
+	      (when match
+		(setq matches (cons match matches))))
+	    (setq amount (- amount 1)))))
+      matches)))
+
+(defun dv--match-pairs (pairs string)
+  "Returns a list of every pair, representing element of PAIRS, that
+matched string."
+  (let ((matches))
+    (dolist (pair pairs)
+      (let* ((regexp (car pair))
+	     (groups-amount (cdr pair))
+	     (other-matches (dv--match-strings-all-groups regexp string groups-amount)))
+	(setq matches (append matches other-matches))))
+    matches))
+
+(defun dv--match-package-pairs (string)
+  "Return packages name matched in STRING."
+  (dv--match-pairs dv-package-match-pairs string))
+
+(defun dv--match-path-pairs (string)
+  "Return paths name matched in STRING."
+  (dv--match-pairs dv-path-match-pairs string))
+
+(defun dv--unique (seq)
+  "Returns a copy of SEQ without duplicates. Wrapping
+`cl-delete-duplicates'."
+  (cl-remove-duplicates seq :test #'equal))
 
 (defun dv-run-dot (dot-code sentinel &rest args)
   "It will create a dot subprocess by using `make-process', passing the
@@ -92,11 +171,11 @@ SENTINEL argument is supposed to be a function passed to the `:sentinel'
 
 (defmacro dv--make-create-graph-func (name process-element-func)
   `(defun ,name (&rest seq)
-    (let ((graph (make-hash-table :test 'equal))
-	  (seen (make-hash-table :test 'equal)))
-      (dolist (element seq)
-	(,process-element-func graph seen element))
-      graph)))
+     (let ((graph (make-hash-table :test #'equal))
+	   (seen (make-hash-table :test #'equal)))
+       (dolist (element seq)
+	 (,process-element-func graph seen element))
+       graph)))
 
 (defun dv--get-package-desc (pkg)
   "Returns `package-desc' object is PKG is available. Otherwise it returns
@@ -126,13 +205,13 @@ dependencies. The packages metadatas are retrieved thanks to the
       (unless (gethash key seen)
 	(puthash key t seen)
 	;; Get PKG metadata
-	(let* ((desc (dv--get-package-desc pkg))
-	       (children nil))
+	(let ((desc (dv--get-package-desc pkg))
+	      (children))
 	  ;; Process PKG reqs
 	  (dolist (req (package-desc-reqs desc))
 	    (let* ((child (car req))
 		   (child-key (dv--get-package-graph-key child)))
-	      (setq children (append children (list child-key)))
+	      (setq children (cons child-key children))
 	      (dv--package-update-graph graph seen child)))
 	  ;; Update GRAPH with the computed PKG metadata
 	  (puthash key (make-dv-graph-value
@@ -151,13 +230,53 @@ dependencies. The packages metadatas are retrieved thanks to the
 		  ".")))
     (concat name "-" version)))
 
-(defun dv--path-update-graph (graph _seen _path)
+(defun dv--path-update-graph (graph seen path &optional base-dir)
   "Fill GRAPH, which is a hash table depending of the text found in the
 content read from PATH. It returns GRAPH.
 
 So, PATH will be read, then parsed to extract dependencies. Basically,
 we are looking for ELisp expression with keywords like `require',
 `use-package', `load-path', etc.."
+  ;; If there is no BASE-DIR, we use the current directory as BASE-DIR
+  (unless base-dir
+    (setq base-dir (file-name-directory (file-truename path))))
+  (let* ((absolute-path (if (file-name-absolute-p path)
+			    path
+			  ;; Concat BASE-DIR and PATH if PATH is relative
+			  (file-truename (file-name-concat base-dir path))))
+	 (key (make-dv-graph-key
+	       :type dv-type-path
+	       :label absolute-path)))
+    (unless (gethash key seen)
+      (puthash key t seen)
+      (let* ((text (dv--get-string-from-file absolute-path))
+	     (child-packages (dv--unique (dv--match-package-pairs text)))
+	     (child-paths (dv--unique (dv--match-path-pairs text)))
+	     (children))
+	;; Process package dependencies
+	(dolist (child-package child-packages)
+	  (let* ((package-symbol (intern child-package))
+		 (package-key (dv--get-package-graph-key package-symbol)))
+	    (setq children (cons package-key children))
+	    ;; Visit child package
+	    (dv--package-update-graph graph seen package-symbol)))
+	;; Process path dependencies
+	(dolist (child-path child-paths)
+	  (let* ((child-absolute-path (if (file-name-absolute-p child-path)
+					  child-path
+					(file-truename (file-name-concat base-dir child-path))))
+		 (path-key (make-dv-graph-key
+			    :type 'path
+			    :label child-absolute-path)))
+	    (setq children (cons path-key children))
+	    ;; Visit child path
+	    (dv--path-update-graph
+	     graph seen child-absolute-path
+	     (file-name-directory child-absolute-path))))
+	;; Update the graph
+	(puthash key (make-dv-graph-value
+		      :metadata absolute-path
+		      :children children) graph))))
   graph)
 
 (dv--make-create-graph-func dv-path-create-graph
@@ -179,7 +298,7 @@ directed GRAPH. CELL represents a GRAPH value containing the needed
 metadatas to traverse the GRAPH."
   (unless (gethash key seen)
     (puthash key t seen)
-    (let* ((dot-code nil)
+    (let* ((dot-code)
 	   (value (gethash key graph))
 	   (children (dv-graph-value-children value))
 	   (label (dv-graph-key-label key)))
@@ -220,12 +339,12 @@ the produced dot code will be written."
 		    ;; Preventing a scenario where there are only orphans nodes,
 		    ;; resulting into a blank graph
 		    ;;
-		    ;; So we first declare every dependency as a header.
+		    ;; So we first declare every dependency as a header
 		    (dv--create-dot-code-var-declarations graph)
 		    ;; Then we compute the nodes links
 		    (apply
 		     #'dv--create-dot-code-links-from-keys
-		     graph (make-hash-table :test 'equal) keys)
+		     graph (make-hash-table :test #'equal) keys)
 		    "}")
 		   "\n")))
     (when dest-file
@@ -267,7 +386,7 @@ produced image will be open by Emacs when possible."
 (dv--make-entry-point-func dv-path
 			   #'dv-path-create-graph
 			   (lambda (path)
-			     (make-dv-graph-key :type dv-type-path :label path)))
+			     (make-dv-graph-key :type dv-type-path :label (file-truename path))))
 
 (provide 'dv)
 
