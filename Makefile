@@ -11,7 +11,7 @@ INSTALL_DIR = ${EMACS_USER_DIR}/manual-packages/${PACKAGE_NAME}
 SOURCE_FILES = dv.el
 OBJECT_FILES = ${SOURCE_FILES:.el=.elc}
 FILES = ${SOURCE_FILES} ${OBJECT_FILES}
-TEST_FILES = dv-test.elc
+TEST_FILES = test/dv-test.elc
 
 LOAD_FILES_FOR_TEST = ${foreach file, ${OBJECT_FILES} ${TEST_FILES}, --load ${file}}
 

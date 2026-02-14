@@ -56,7 +56,7 @@
 (defconst dv-type-filepath 'filepath
   "Graph node type for filepath")
 
-(defconst dv-require-regexp "(\\s-*require\\s-*'\\(?1:[a-z]*\\)\\s-*"
+(defconst dv-require-regexp "(\\s-*require\\s-*'\\(?1:[a-z-]*\\)\\s-*"
   "Regular expression for capturing `require' package name")
 
 (defconst dv-use-package-regexp "(use-package\\s-*\\(?1:[a-z-]+\\)"
@@ -246,9 +246,11 @@ dependencies. The packages metadatas are retrieved thanks to the
 
 (defun dv--get-absolute-filepath (filepath &optional basedir)
   "Returns an absolute FILEPATH"
-  (if (file-name-absolute-p filepath)
-      filepath
-    (file-truename (file-name-concat basedir filepath))))
+  (or
+   (when (file-name-absolute-p filepath) filepath)
+   (when basedir (file-truename
+		  (file-name-concat basedir filepath)))
+   (file-truename filepath)))
 
 (defun dv--filepath-update-graph (graph seen filepath &optional basedir)
   "Fill GRAPH, which is a hash table depending of the text found in the
@@ -257,8 +259,6 @@ content read from FILEPATH. It returns GRAPH.
 So, FILEPATH will be read, then parsed to extract dependencies. Basically,
 we are looking for ELisp expression with keywords like `require',
 `use-package', `load-path', etc.."
-  (unless basedir
-    (setq basedir (file-name-directory (file-truename filepath))))
   (let* ((absolute-path (dv--get-absolute-filepath filepath basedir))
 	 (key (make-dv-graph-key :type dv-type-filepath
 				 :label absolute-path)))
@@ -267,6 +267,9 @@ we are looking for ELisp expression with keywords like `require',
       (let* ((text (dv--get-string-from-file absolute-path))
 	     (child-packages (dv--unique (dv--match-package-pairs text)))
 	     (child-filepaths (dv--unique (dv--match-filepath-pairs text)))
+	     (child-basedir (or
+			     basedir
+			     (file-name-directory (file-truename filepath))))
 	     (children))
 	;; Process package dependencies
 	(dolist (child-package child-packages)
@@ -276,7 +279,9 @@ we are looking for ELisp expression with keywords like `require',
 	    (dv--package-update-graph graph seen package-symbol)))
 	;; Process filepath dependencies
 	(dolist (child-filepath child-filepaths)
-	  (let* ((child-absolute-path (dv--get-absolute-filepath child-filepath basedir))
+	  (let* ((child-absolute-path (dv--get-absolute-filepath
+				       child-filepath
+				       child-basedir))
 		 (filepath-key (make-dv-graph-key :type 'filepath
 						  :label child-absolute-path)))
 	    (setq children (cons filepath-key children))
