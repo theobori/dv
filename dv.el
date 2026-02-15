@@ -94,7 +94,7 @@ with the amount of regexp groups for each")
 
 (cl-defstruct dv-graph-value "Representing a graph value"
 	      (metadata nil
-			:read-only t
+			:read-only nil
 			:type any
 			:documentation "Representing the node metadata")
 	      (children nil
@@ -211,26 +211,25 @@ nil."
 		((stringp pkg) pkg)
 		(t (error "Invalid label type %s" (type-of pkg))))))
 
-(defun dv--package-update-graph (graph seen pkg)
+(defun dv--package-update-graph (graph seen pkg &optional parent-value)
   "Fill GRAPH, which is a hash table, with a PKG metadata and its
 dependencies. The packages metadatas are retrieved thanks to the
 `dv--get-package-desc' function. It returns GRAPH."
   (when pkg
-    (let ((key (dv--get-package-graph-key pkg)))
+    (let ((key (dv--get-package-graph-key pkg))
+	  (value (make-dv-graph-value)))
+      (when parent-value
+	(setf (dv-graph-value-children parent-value)
+	      (cons key (dv-graph-value-children parent-value))))
       (unless (gethash key seen)
 	(puthash key t seen)
-	;; Get PKG metadata
-	(let ((desc (dv-get-package-desc pkg))
-	      (children))
+	(let ((desc (dv-get-package-desc pkg)))
 	  ;; Process PKG reqs
 	  (dolist (req (package-desc-reqs desc))
-	    (let* ((child (car req))
-		   (child-key (dv--get-package-graph-key child)))
-	      (setq children (cons child-key children))
-	      (dv--package-update-graph graph seen child)))
-	  ;; Update GRAPH with the computed PKG metadata
-	  (puthash key (make-dv-graph-value :metadata desc
-					    :children children) graph)))
+	    (let ((child (car req)))
+	      (dv--package-update-graph graph seen child value)))
+	  (setf (dv-graph-value-metadata value) desc))
+	(puthash key value graph))
       graph)))
 
 (dv--make-create-graph-func dv-package-create-graph
@@ -252,7 +251,7 @@ dependencies. The packages metadatas are retrieved thanks to the
 		  (file-name-concat basedir filepath)))
    (file-truename filepath)))
 
-(defun dv--filepath-update-graph (graph seen filepath &optional basedir)
+(defun dv--filepath-update-graph (graph seen filepath &optional parent-value basedir)
   "Fill GRAPH, which is a hash table depending of the text found in the
 content read from FILEPATH. It returns GRAPH.
 
@@ -261,35 +260,26 @@ we are looking for ELisp expression with keywords like `require',
 `use-package', `load-path', etc.."
   (let* ((absolute-path (dv--get-absolute-filepath filepath basedir))
 	 (key (make-dv-graph-key :type dv-type-filepath
-				 :label absolute-path)))
+				 :label absolute-path))
+	 (value (make-dv-graph-value)))
+    (when parent-value
+      (setf (dv-graph-value-children parent-value)
+	    (cons key (dv-graph-value-children parent-value))))
     (unless (gethash key seen)
       (puthash key t seen)
+      ;; Read file text and match dependencies
       (let* ((text (dv--get-string-from-file absolute-path))
-	     (child-packages (dv--unique (dv--match-package-pairs text)))
-	     (child-filepaths (dv--unique (dv--match-filepath-pairs text)))
-	     (child-basedir (or
-			     basedir
-			     (file-name-directory (file-truename filepath))))
-	     (children))
+	     (c-packages (dv--unique (dv--match-package-pairs text)))
+	     (c-filepaths (dv--unique (dv--match-filepath-pairs text)))
+	     (next-basedir (file-name-directory (file-truename absolute-path))))
 	;; Process package dependencies
-	(dolist (child-package child-packages)
-	  (let* ((package-symbol (intern child-package))
-		 (package-key (dv--get-package-graph-key package-symbol)))
-	    (setq children (cons package-key children))
-	    (dv--package-update-graph graph seen package-symbol)))
+	(dolist (c-package c-packages)
+	  (dv--package-update-graph graph seen (intern c-package) value))
 	;; Process filepath dependencies
-	(dolist (child-filepath child-filepaths)
-	  (let* ((child-absolute-path (dv--get-absolute-filepath
-				       child-filepath
-				       child-basedir))
-		 (filepath-key (make-dv-graph-key :type 'filepath
-						  :label child-absolute-path)))
-	    (setq children (cons filepath-key children))
-	    (dv--filepath-update-graph
-	     graph seen child-absolute-path
-	     (file-name-directory child-absolute-path))))
-	(puthash key (make-dv-graph-value :metadata absolute-path
-					  :children children) graph))))
+	(dolist (c-filepath c-filepaths)
+	  (dv--filepath-update-graph graph seen c-filepath value next-basedir))
+	(setf (dv-graph-value-metadata value) absolute-path)
+	(puthash key value graph))))
   graph)
 
 (dv--make-create-graph-func dv-filepath-create-graph
