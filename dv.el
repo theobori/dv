@@ -56,6 +56,12 @@
 (defconst dv-type-filepath 'filepath
   "Graph node type for filepath")
 
+(defconst dv-type-dirpath 'dirpath
+  "Graph node type for dirpath")
+
+(defconst dv-elisp-text-file-extension "el"
+  "ELisp text file extension")
+
 (defconst dv-require-regexp "(\\s-*require\\s-*'\\(?1:[a-z-]*\\)\\s-*"
   "Regular expression for capturing `require' package name")
 
@@ -94,7 +100,7 @@ with the amount of regexp groups for each")
 
 (cl-defstruct dv-graph-value "Representing a graph value"
 	      (metadata nil
-			:read-only nil
+			:read-only t
 			:type any
 			:documentation "Representing the node metadata")
 	      (children nil
@@ -216,32 +222,22 @@ nil."
 dependencies. The packages metadatas are retrieved thanks to the
 `dv--get-package-desc' function. It returns GRAPH."
   (when pkg
-    (let ((key (dv--get-package-graph-key pkg))
-	  (value (make-dv-graph-value)))
+    (let ((key (dv--get-package-graph-key pkg)))
       (when parent-value
 	(setf (dv-graph-value-children parent-value)
 	      (cons key (dv-graph-value-children parent-value))))
       (unless (gethash key seen)
 	(puthash key t seen)
-	(let ((desc (dv-get-package-desc pkg)))
+	(let* ((desc (dv-get-package-desc pkg))
+	      (value (make-dv-graph-value :metadata desc)))
 	  ;; Process PKG reqs
 	  (dolist (req (package-desc-reqs desc))
 	    (let ((child (car req)))
 	      (dv--package-update-graph graph seen child value)))
-	  (setf (dv-graph-value-metadata value) desc))
-	(puthash key value graph))
-      graph)))
+	(puthash key value graph)))))
+      graph)
 
-(dv--make-create-graph-func dv-package-create-graph
-			    dv--package-update-graph)
-
-(defun dv--get-package-desc-node-label (desc)
-  "Returns a node label for a `package-desc' object."
-  (let ((name (symbol-name (package-desc-name desc)))
-	(version (string-join
-		  (mapcar (lambda (x) (format "%s" x)) (package-desc-version desc))
-		  ".")))
-    (concat name "-" version)))
+(dv--make-create-graph-func dv-package-create-graph dv--package-update-graph)
 
 (defun dv--get-absolute-filepath (filepath &optional basedir)
   "Returns an absolute FILEPATH"
@@ -260,8 +256,7 @@ we are looking for ELisp expression with keywords like `require',
 `use-package', `load-path', etc.."
   (let* ((absolute-path (dv--get-absolute-filepath filepath basedir))
 	 (key (make-dv-graph-key :type dv-type-filepath
-				 :label absolute-path))
-	 (value (make-dv-graph-value)))
+				 :label absolute-path)))
     (when parent-value
       (setf (dv-graph-value-children parent-value)
 	    (cons key (dv-graph-value-children parent-value))))
@@ -271,57 +266,52 @@ we are looking for ELisp expression with keywords like `require',
       (let* ((text (dv--get-string-from-file absolute-path))
 	     (c-packages (dv--unique (dv--match-package-pairs text)))
 	     (c-filepaths (dv--unique (dv--match-filepath-pairs text)))
-	     (next-basedir (file-name-directory (file-truename absolute-path))))
+	     (next-basedir (file-name-directory (file-truename absolute-path)))
+	     (value (make-dv-graph-value :metadata absolute-path)))
 	;; Process package dependencies
 	(dolist (c-package c-packages)
 	  (dv--package-update-graph graph seen (intern c-package) value))
 	;; Process filepath dependencies
 	(dolist (c-filepath c-filepaths)
 	  (dv--filepath-update-graph graph seen c-filepath value next-basedir))
-	(setf (dv-graph-value-metadata value) absolute-path)
 	(puthash key value graph))))
   graph)
 
-(dv--make-create-graph-func dv-filepath-create-graph
-			    dv--filepath-update-graph)
+(dv--make-create-graph-func dv-filepath-create-graph dv--filepath-update-graph)
 
-(defun dv--get-filepath-node-label (filepath)
-  "Returns a node label for a FILEPATH."
-  filepath)
+;; This function cannot have a parent node at the moment
+(defun dv--dirpath-update-graph (graph seen dir)
+  "Recursively find ELisp text files (.el files) and process them."
+  (let* ((absolute-path (file-truename dir))
+	 (key (make-dv-graph-key :type dv-type-dirpath
+				 :label absolute-path)))
+    (unless (gethash key seen)
+      (puthash key t seen)
+      (let* ((value (make-dv-graph-value :metadata absolute-path))
+	 (regexp (concat "\\." dv-elisp-text-file-extension "$"))
+	 (c-filepaths (directory-files-recursively absolute-path regexp)))
+	(dolist (c-filepath c-filepaths)
+	  (dv--filepath-update-graph graph seen c-filepath value))
+	(puthash key value graph))))
+  graph)
 
-(defun dv--get-node-label (metadata)
-  "Returns a node label depending of the METADATA object type."
-  (cond ((stringp metadata) (dv--get-filepath-node-label metadata))
-	((package-desc-p metadata) (dv--get-package-desc-node-label metadata))
-	(t (error "Invalid node metadata type %s" (type-of metadata)))))
+(dv--make-create-graph-func dv-dirpath-create-graph dv--dirpath-update-graph)
 
-(defun dv--create-dot-code-links (graph seen key)
+(defun dv--create-dot-code-links (graph)
   "Returns a string representing dot code dependencies relations for a
 directed GRAPH. CELL represents a GRAPH value containing the needed
 metadatas to traverse the GRAPH."
-  (unless (gethash key seen)
-    (puthash key t seen)
-    (let* ((dot-code)
-	   (value (gethash key graph))
-	   (children (dv-graph-value-children value))
-	   (label (dv-graph-key-label key)))
-      (dolist (child children)
-	(let* ((child-label (dv-graph-key-label child))
-	       (dot-code-links (concat "\"" label "\" -> \"" child-label "\""))
-	       ;; Process CHILD node links
-	       (dot-code-links-child (dv--create-dot-code-links graph seen child)))
-	  ;; Append the current node link with CHILD node
-	  (setq dot-code (append dot-code (list dot-code-links)))
-	  ;; Only append CHILD node links if it has children
-	  (when (> (length dot-code-links-child) 0)
-	    (setq dot-code (append dot-code (list dot-code-links-child))))))
-      (string-join dot-code "\n"))))
-
-(defun dv--create-dot-code-links-from-keys (graph seen &rest keys)
-  "Helper function that produce dot code relations with GRAPH KEYS as input."
-  (string-join
-   (mapcar (lambda (key) (dv--create-dot-code-links graph seen key)) keys)
-   "\n"))
+  (let ((keys (hash-table-keys graph))
+	(dot-links))
+    (dolist (key keys)
+      (let* ((label (dv-graph-key-label key))
+	     (value (gethash key graph))
+	     (children (dv-graph-value-children value)))
+	(dolist (child-key children)
+	  (push (concat "\"" label "\" -> \""
+			(dv-graph-key-label child-key) "\"")
+		dot-links))))
+    (string-join dot-links "\n")))
 
 (defun dv--create-dot-code-var-declarations (graph)
   "Helper function that produce node declarations for every node of the
@@ -331,7 +321,7 @@ GRAPH. It's mainly for prenventing orphan nodes."
 	     (concat "\"" (dv-graph-key-label key)  "\""))))
     (string-join (mapcar f keys) "\n")))
 
-(defun dv-create-dot-code (graph &optional dest-file &rest keys)
+(defun dv-create-dot-code (graph &optional dest-file)
   "It returns a string representing a directed GRAPH in the dot language
 with. KEYS are the root nodes that will be traversed in depth. DEST-FILE
 is an optional parameter, if non-nil it should specify a filepath with
@@ -345,9 +335,7 @@ the produced dot code will be written."
 		    ;; So we first declare every dependency as a header
 		    (dv--create-dot-code-var-declarations graph)
 		    ;; Then we compute the nodes links
-		    (apply
-		     #'dv--create-dot-code-links-from-keys
-		     graph (make-hash-table :test #'equal) keys)
+		    (dv--create-dot-code-links graph)
 		    "}")
 		   "\n")))
     (when dest-file
@@ -355,12 +343,12 @@ the produced dot code will be written."
 	(insert dot-code)))
     dot-code))
 
-(defun dv--process (graph keys dest-file &optional open-file)
+(defun dv--process (graph dest-file &optional open-file)
   "It produces dot code representing KEYS dependencies. This dot
 code is passed to the dot program that will interpret it, then create an
 image written at the DEST-FILE filepath. If OPEN-FILE is non-nil, the
 produced image will be open by Emacs when possible."
-  (let* ((dot-code (apply #'dv-create-dot-code graph nil keys))
+  (let* ((dot-code (apply #'dv-create-dot-code graph nil))
 	 (file-format (file-name-extension dest-file))
 	 (absolute-path (file-truename dest-file))
 	 ;; Sentinel function evaluated after the dot process execution.
@@ -374,23 +362,16 @@ produced image will be open by Emacs when possible."
     (dv-run-dot dot-code sentinel "-T" file-format "-o" dest-file)
     (message "The file %s has been created" absolute-path)))
 
-(defmacro dv--make-entry-point-func (name create-graph-func entity-to-key-func)
+(defmacro dv--make-entry-point-func (name create-graph-func)
   `(defun ,name (dest-file &optional open-file &rest seq)
      "It generates an image file representing dependencies. See
 `dv--process' for more details."
      (dv--process (apply ,create-graph-func seq)
-		  (mapcar ,entity-to-key-func seq)
 		  dest-file open-file)))
 
-(dv--make-entry-point-func dv-package
-			   #'dv-package-create-graph
-			   (lambda (pkg) (dv--get-package-graph-key pkg)))
-
-(dv--make-entry-point-func dv-filepath
-			   #'dv-filepath-create-graph
-			   (lambda (filepath)
-			     (make-dv-graph-key :type dv-type-filepath
-						:label (file-truename filepath))))
+(dv--make-entry-point-func dv-package #'dv-package-create-graph)
+(dv--make-entry-point-func dv-filepath #'dv-filepath-create-graph)
+(dv--make-entry-point-func dv-dirpath #'dv-dirpath-create-graph)
 
 (provide 'dv)
 
