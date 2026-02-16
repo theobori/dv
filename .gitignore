@@ -19,7 +19,7 @@ dist/
 .direnv
 result
 
-*.png
-*.svg
-*.jpeg
-*.jpg
+/*.png
+/*.svg
+/*.jpeg
+/*.jpg

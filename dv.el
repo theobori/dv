@@ -185,7 +185,7 @@ SENTINEL argument is supposed to be a function passed to the `:sentinel'
        graph)))
 
 (defun dv--get-package-desc (pkg)
-  "Returns `package-desc' object is PKG is available. Otherwise it returns
+  "Returns `package-desc' object if PKG is available. Otherwise it returns
 nil."
   (or
    (if (package-desc-p pkg) pkg)
