@@ -229,13 +229,13 @@ dependencies. The packages metadatas are retrieved thanks to the
       (unless (gethash key seen)
 	(puthash key t seen)
 	(let* ((desc (dv-get-package-desc pkg))
-	      (value (make-dv-graph-value :metadata desc)))
+	       (value (make-dv-graph-value :metadata desc)))
 	  ;; Process PKG reqs
 	  (dolist (req (package-desc-reqs desc))
 	    (let ((child (car req)))
 	      (dv--package-update-graph graph seen child value)))
-	(puthash key value graph)))))
-      graph)
+	  (puthash key value graph)))))
+  graph)
 
 (dv--make-create-graph-func dv-package-create-graph dv--package-update-graph)
 
@@ -288,8 +288,8 @@ we are looking for ELisp expression with keywords like `require',
     (unless (gethash key seen)
       (puthash key t seen)
       (let* ((value (make-dv-graph-value :metadata absolute-path))
-	 (regexp (concat "\\." dv-elisp-text-file-extension "$"))
-	 (c-filepaths (directory-files-recursively absolute-path regexp)))
+	     (regexp (concat "\\." dv-elisp-text-file-extension "$"))
+	     (c-filepaths (directory-files-recursively absolute-path regexp)))
 	(dolist (c-filepath c-filepaths)
 	  (dv--filepath-update-graph graph seen c-filepath value))
 	(puthash key value graph))))
@@ -357,22 +357,59 @@ produced image will be open by Emacs when possible."
 		     (let ((status (process-exit-status proc)))
 		       (unless (equal status 0)
 			 (error "%s failed with status code %s" proc status)))
+		     (message "The file %s has been created" absolute-path)
 		     (when (and (display-graphic-p) open-file)
 		       (find-file absolute-path)))))
-    (dv-run-dot dot-code sentinel "-T" file-format "-o" dest-file)
-    (message "The file %s has been created" absolute-path)))
+    (dv-run-dot dot-code sentinel "-T" file-format "-o" dest-file)))
 
-(defmacro dv--make-entry-point-func (name create-graph-func)
+(defun dv--read-package ()
+  "Function taken and adapted from the `describe-package' source code."
+  (let* ((guess (or (function-called-at-point)
+                    (symbol-at-point))))
+    (require 'finder-inf nil t)
+    ;; Load the package list if necessary (but don't activate them).
+    (unless package--initialized
+      (package-initialize t))
+    (let ((packages (append (mapcar #'car package-alist)
+                            (mapcar #'car package-archive-contents)
+                            (mapcar #'car package--builtins))))
+      (unless (memq guess packages)
+        (setq guess nil))
+      (setq packages (mapcar #'symbol-name packages))
+      (let ((val
+             (completing-read (format-prompt "Select package" guess)
+                              packages nil t nil nil (when guess
+                                                       (symbol-name guess)))))
+        (intern val)))))
+
+(defun dv--read-path (func &rest args)
+  "Generic wrapper for functions that returns a path that must be absolute."
+  (file-truename (apply func args)))
+
+(defun dv--read-file (&rest args)
+  "`read-file-name' wrapper that return an absolute path."
+  (apply #'dv--read-path #'read-file-name args))
+
+(defun dv--read-directory (&rest args)
+  "`read-directory-name' wrapper that return an absolute path."
+  (apply #'dv--read-path #'read-directory-name args))
+
+(defmacro dv--make-entry-point-func (name create-graph-func read-dep-func)
   `(defun ,name (dest-file &optional open-file &rest seq)
-     "It generates an image file representing dependencies. See
+     "It generates an image file representing dependencies with a graph. See
 `dv--process' for more details."
+     (interactive (nreverse (list
+			     (,read-dep-func)
+			     t
+			     (dv--read-file "Destination file: "))))
      (dv--process (apply ,create-graph-func seq)
 		  dest-file open-file)))
 
-(dv--make-entry-point-func dv-package #'dv-package-create-graph)
-(dv--make-entry-point-func dv-filepath #'dv-filepath-create-graph)
-(dv--make-entry-point-func dv-dirpath #'dv-dirpath-create-graph)
-
+(dv--make-entry-point-func dv-package #'dv-package-create-graph dv--read-package)
+(dv--make-entry-point-func dv-filepath #'dv-filepath-create-graph
+			   (lambda () (dv--read-file "Read File: " nil nil t)))
+(dv--make-entry-point-func dv-dirpath #'dv-dirpath-create-graph
+			   (lambda () (dv--read-directory "Read directory: " nil nil t)))
 (provide 'dv)
 
 ;;; dv.el ends here
