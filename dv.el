@@ -122,6 +122,11 @@ with the amount of regexp groups for each")
 					      dv-node-colors)))))
   :group 'dv)
 
+(defcustom dv-dot-extra-args nil
+  "Dot executable extra arguments"
+  :type '(repeat string)
+  :group 'dv)
+
 ;;;; Structures
 
 (cl-defstruct dv-graph-key "Representing a graph key"
@@ -206,7 +211,7 @@ SENTINEL argument is supposed to be a function passed to the `:sentinel'
     (error "Missing the dot executable"))
   (let ((process (make-process :name dv-dot-executable
                                :buffer nil
-                               :command (append (list dv-dot-executable) args)
+                               :command (append (list dv-dot-executable) args dv-dot-extra-args)
                                :connection-type 'pipe
 			       :sentinel sentinel)))
     (process-send-string process dot-code)
