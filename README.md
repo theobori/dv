@@ -32,8 +32,8 @@ Emacs package metadata retrieval is similar to the `describe-package` function, 
 
 Several node relationships are possible with the current implementation.
 
-- `Package` nodes can only have ”package" child nodes.
-- `Filepath` nodes can have both `filepath` and `package` child nodes.
+- `package` nodes can only have ”package" child nodes.
+- `filepath` nodes can have both `filepath` and `package` child nodes.
 - `dirpath` nodes cannot have parent nodes and can only have `filepath` child nodes.
 
 Circular imports are allowed and supported.

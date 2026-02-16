@@ -39,16 +39,31 @@
   "Emacs package dependency visualizer"
   :group 'tools
   :group 'external
-  :link "https://github.com/theobori/dv")
-
-;;;; User options
-
-(defcustom dv-dot-executable (executable-find "dot")
-  "Dot executable."
-  :type 'string
-  :group 'dv)
+  :link '(url-link :tag "GitHub Repository" "https://github.com/theobori/dv"))
 
 ;;;; Constants
+
+(defconst dv-node-colors '("black"
+			   "white"
+			   "red"
+			   "green"
+			   "blue"
+			   "yellow"
+			   "cyan"
+			   "magenta"
+			   "orange"
+			   "gray"
+			   "lightgray"
+			   "darkgray"
+			   "brown"
+			   "purple"
+			   "lightblue"
+			   "lightgreen"
+			   "pink"
+			   "beige"
+			   "salmon"
+			   "violet")
+  "Graph node main colors available for customizations")
 
 (defconst dv-type-package 'package
   "Graph node type for package")
@@ -58,6 +73,9 @@
 
 (defconst dv-type-dirpath 'dirpath
   "Graph node type for dirpath")
+
+(defconst dv-types (list dv-type-package dv-type-filepath dv-type-dirpath)
+  "Graph node types available")
 
 (defconst dv-elisp-text-file-extension "el"
   "ELisp text file extension")
@@ -85,6 +103,24 @@ with the amount of regexp groups for each")
 				   (cons dv-load-regexp 1))
   "List of cons, regular expressions that capture package names associated
 with the amount of regexp groups for each")
+
+;;;; User options
+
+(defcustom dv-dot-executable (executable-find "dot")
+  "Dot executable"
+  :type 'string
+  :group 'dv)
+
+(defcustom dv-node-properties `((,dv-type-package :color "red")
+				(,dv-type-filepath :color "blue")
+				(,dv-type-dirpath :color "green"))
+  "Node properties"
+  :type `(alist
+          :value-type (plist :keys
+			     (:color (choice (mapcar
+					      (lambda (color) `(const :tag ,color ,color))
+					      dv-node-colors)))))
+  :group 'dv)
 
 ;;;; Structures
 
@@ -314,12 +350,11 @@ metadatas to traverse the GRAPH."
     (string-join dot-links "\n")))
 
 (defun dv--get-node-color (key-type)
-  (pcase key-type
-    ;; Weird macro expansion prevents me to use dedicated type constants
-    ('dirpath "green")
-    ('filepath "blue")
-    ('package "red")
-    (_ (error "Invalid key type %s" key-type))))
+  (let ((color (plist-get
+		(alist-get key-type dv-node-properties) :color)))
+    (unless color
+      (error "Unable to fetch node color with type %s" key-type))
+    color))
 
 (defun dv--get-key-color (key)
   (dv--get-node-color (dv-graph-key-type key)))
