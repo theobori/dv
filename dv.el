@@ -313,12 +313,25 @@ metadatas to traverse the GRAPH."
 		dot-links))))
     (string-join dot-links "\n")))
 
+(defun dv--get-node-color (key-type)
+  (pcase key-type
+    ;; Weird macro expansion prevents me to use dedicated type constants
+    ('dirpath "green")
+    ('filepath "blue")
+    ('package "red")
+    (_ (error "Invalid key type %s" key-type))))
+
+(defun dv--get-key-color (key)
+  (dv--get-node-color (dv-graph-key-type key)))
+
 (defun dv--create-dot-code-var-declarations (graph)
   "Helper function that produce node declarations for every node of the
 GRAPH. It's mainly for prenventing orphan nodes."
   (let ((keys (hash-table-keys graph))
 	(f (lambda (key)
-	     (concat "\"" (dv-graph-key-label key)  "\""))))
+	     (let ((label (dv-graph-key-label key))
+		   (color (dv--get-key-color key)))
+	       (concat "\"" label "\"" "[color=" color "]")))))
     (string-join (mapcar f keys) "\n")))
 
 (defun dv-create-dot-code (graph &optional dest-file)
@@ -399,13 +412,13 @@ produced image will be open by Emacs when possible."
      "It generates an image file representing dependencies with a graph. See
 `dv--process' for more details."
      (interactive (nreverse (list
-			     (,read-dep-func)
+			     (funcall ,read-dep-func)
 			     t
 			     (dv--read-file "Destination file: "))))
      (dv--process (apply ,create-graph-func seq)
 		  dest-file open-file)))
 
-(dv--make-entry-point-func dv-package #'dv-package-create-graph dv--read-package)
+(dv--make-entry-point-func dv-package #'dv-package-create-graph #'dv--read-package)
 (dv--make-entry-point-func dv-filepath #'dv-filepath-create-graph
 			   (lambda () (dv--read-file "Read File: " nil nil t)))
 (dv--make-entry-point-func dv-dirpath #'dv-dirpath-create-graph
