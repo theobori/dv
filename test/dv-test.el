@@ -89,10 +89,11 @@ correctly."
 	   "/tmp/test.el"))
   (should (equal
 	   (dv--get-absolute-filepath "./tmp/test.el")
-	   (file-name-concat (file-truename ".") "tmp/test.el")))
+	   (file-name-concat (expand-file-name ".") "tmp/test.el")))
   (should (equal
 	   (dv--get-absolute-filepath "./tmp/test.el" "basedir")
-	   (file-name-concat (file-truename ".") "basedir/tmp/test.el"))))
+	   (file-name-concat (expand-file-name
+			      ".") "basedir/tmp/test.el"))))
 
 (ert-deftest test-dv-run-dot ()
   "Test that the functions `dv-run-dot' works correctly."
