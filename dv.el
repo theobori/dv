@@ -284,9 +284,9 @@ dependencies. The packages metadatas are retrieved thanks to the
   "Returns an absolute FILEPATH"
   (or
    (when (file-name-absolute-p filepath) filepath)
-   (when basedir (file-truename
+   (when basedir (expand-file-name
 		  (file-name-concat basedir filepath)))
-   (file-truename filepath)))
+   (expand-file-name filepath)))
 
 (defun dv--filepath-update-graph (graph seen filepath &optional parent-value basedir)
   "Fill GRAPH, which is a hash table depending of the text found in the
@@ -307,7 +307,7 @@ we are looking for ELisp expression with keywords like `require',
       (let* ((text (dv--get-string-from-file absolute-path))
 	     (c-packages (dv--unique (dv--match-package-pairs text)))
 	     (c-filepaths (dv--unique (dv--match-filepath-pairs text)))
-	     (next-basedir (file-name-directory (file-truename absolute-path)))
+	     (next-basedir (file-name-directory (expand-file-name absolute-path)))
 	     (value (make-dv-graph-value :metadata absolute-path)))
 	;; Process package dependencies
 	(dolist (c-package c-packages)
@@ -323,7 +323,7 @@ we are looking for ELisp expression with keywords like `require',
 ;; This function cannot have a parent node at the moment
 (defun dv--dirpath-update-graph (graph seen dir)
   "Recursively find ELisp text files (.el files) and process them."
-  (let* ((absolute-path (file-truename dir))
+  (let* ((absolute-path (expand-file-name dir))
 	 (key (make-dv-graph-key :type dv-type-dirpath
 				 :label absolute-path)))
     (unless (gethash key seen)
@@ -403,7 +403,7 @@ image written at the DEST-FILE filepath. If OPEN-FILE is non-nil, the
 produced image will be open by Emacs when possible."
   (let* ((dot-code (apply #'dv-create-dot-code graph nil))
 	 (file-format (file-name-extension dest-file))
-	 (absolute-path (file-truename dest-file))
+	 (absolute-path (expand-file-name dest-file))
 	 ;; Sentinel function evaluated after the dot process execution.
 	 ;; It has access to OPEN-FILE and DEST-FILE.
 	 (sentinel (lambda (proc _)
@@ -437,7 +437,7 @@ produced image will be open by Emacs when possible."
 
 (defun dv--read-path (func &rest args)
   "Generic wrapper for functions that returns a path that must be absolute."
-  (file-truename (apply func args)))
+  (expand-file-name (apply func args)))
 
 (defun dv--read-file (&rest args)
   "`read-file-name' wrapper that return an absolute path."
